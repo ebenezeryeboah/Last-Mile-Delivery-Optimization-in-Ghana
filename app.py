@@ -1,108 +1,79 @@
+# app.py
 import streamlit as st
-import pandas as pd
-import numpy as np
-import seaborn as sns
-import matplotlib.pyplot as plt
+from streamlit_option_menu import option_menu
 
-# ------------------------------------------------
-# 🎨 Page Configuration
-# ------------------------------------------------
+# =============================
+# 🎨 PAGE CONFIGURATION
+# =============================
 st.set_page_config(
-    page_title="Delivery Analytics & Prediction App",
+    page_title="Delivery Efficiency Predictor (DEP)",
     page_icon="🚚",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# ------------------------------------------------
-# 📘 Sidebar Navigation
-# ------------------------------------------------
-st.sidebar.title("📍 Navigation")
-page = st.sidebar.radio(
-    "Go to:",
-    ["🏠 Home", "📊 Data Overview"]
-)
-
-st.sidebar.markdown("---")
-st.sidebar.info("Developed by **Ebenezer Yeboah**")
-
-# ------------------------------------------------
-# 🏠 HOME PAGE
-# ------------------------------------------------
-if page == "🏠 Home":
-    st.title("🚚 Delivery Analytics & Prediction App")
-    st.markdown("""
-    Welcome to the **Delivery Analytics Platform**, a tool designed to help analyze and predict:
-    - **Delivery Duration (Regression)**
-    - **Delivery Success (Classification)**
-
-    This app supports both **data exploration** and **machine learning predictions** using 
-    real-world delivery datasets.
-
-    **💡 What you can do here:**
-    - Upload your delivery dataset (`.xlsx` format)
-    - Explore delivery trends and performance metrics
-    - Train ML models to predict delivery time or success
-    - Input variables to get live predictions
-
-    ---
-    """)
-
-    st.subheader("📦 Key Capabilities")
-    st.markdown("""
-    - Predict *Delivery Duration* (Days)  
-    - Predict *Delivery Status* (Delivered / Not Delivered)  
-    - Visualize *correlations, distributions, and trends*  
-    - Works perfectly for Ghanaian delivery data 🇬🇭
-    """)
-
-    st.info("➡️ Use the **sidebar** to navigate to the next section.")
-
-# ------------------------------------------------
-# 📊 DATA OVERVIEW PAGE
-# ------------------------------------------------
-elif page == "📊 Data Overview":
-    st.title("📊 Data Overview")
-
-    uploaded_file = st.file_uploader(
-        "Upload your delivery dataset (.xlsx file):", type=["xlsx"]
+# =============================
+# 🧭 SIDEBAR NAVIGATION
+# =============================
+with st.sidebar:
+    selected = option_menu(
+        "Navigation",
+        ["🏠 Home", "📈 Regression Model", "🔍 Classification Model", "📊 Model Insights"],
+        icons=["house", "graph-up", "check-circle", "bar-chart"],
+        menu_icon="cast",
+        default_index=0,
     )
 
-    if uploaded_file:
-        df = pd.read_excel(uploaded_file)
-        st.success("✅ Data uploaded successfully!")
-    else:
-        st.info("Using sample dataset (skynet.xlsx)...")
-        df = pd.read_excel("skynet.xlsx")  # Make sure this file is in the repo
+# =============================
+# 🏠 HOME / ABOUT PAGE
+# =============================
+if selected == "🏠 Home":
+    st.title("🚚 Delivery Efficiency Predictor (DEP)")
+    st.markdown("""
+    Welcome to the **Delivery Efficiency Predictor (DEP)** —  
+    an intelligent analytics platform designed to help logistics and delivery 
+    companies improve **delivery performance** through data-driven insights.  
 
-    # Display DataFrame preview
-    st.subheader("🔍 Data Preview")
-    st.dataframe(df.head(10))
+    ### 🔍 What You Can Do:
+    - **Predict delivery duration** using regression modeling  
+    - **Predict delivery success** using classification modeling  
+    - **Explore feature importance & performance metrics**
+    """)
 
-    # Basic info
-    st.markdown("### 🧮 Dataset Summary")
-    st.write(f"**Rows:** {df.shape[0]} | **Columns:** {df.shape[1]}")
+    st.info("""
+    ⚙️ *This tool builds and runs predictive models directly from your data.*  
+    Simply upload your dataset or enter individual delivery details manually.
+    """)
 
-    # Missing values
-    missing = df.isna().sum()
-    missing = missing[missing > 0].sort_values(ascending=False)
-    if not missing.empty:
-        st.markdown("### ⚠️ Missing Values Summary")
-        st.dataframe(missing)
-    else:
-        st.success("No missing values detected ✅")
+# =============================
+# 📈 REGRESSION MODEL PAGE
+# =============================
+elif selected == "📈 Regression Model":
+    st.header("📈 Delivery Duration Prediction (Regression)")
+    st.write("""
+    This section predicts the **delivery duration (Days to Delivered)** 
+    using features such as location, weight, and customs duration.
+    """)
+    st.info("🧰 Model training, input fields, and predictions will appear here in the next step.")
 
-    # Quick statistics
-    st.markdown("### 📈 Summary Statistics")
-    st.dataframe(df.describe().T)
+# =============================
+# 🔍 CLASSIFICATION MODEL PAGE
+# =============================
+elif selected == "🔍 Classification Model":
+    st.header("🔍 Delivery Success Prediction (Classification)")
+    st.write("""
+    This section predicts whether a delivery will be **successful or failed** 
+    based on key shipment and operational attributes.
+    """)
+    st.info("🧠 Model training, input fields, and performance results will appear here soon.")
 
-    # Visualization section
-    st.markdown("### 📊 Sample Distribution Plot")
-    num_cols = df.select_dtypes(include=np.number).columns.tolist()
-    if num_cols:
-        feature = st.selectbox("Select a numerical column to visualize:", num_cols)
-        fig, ax = plt.subplots(figsize=(8, 4))
-        sns.histplot(df[feature], kde=True, color="skyblue", ax=ax)
-        st.pyplot(fig)
-    else:
-        st.warning("No numerical columns found to plot.")
-
+# =============================
+# 📊 MODEL INSIGHTS PAGE
+# =============================
+elif selected == "📊 Model Insights":
+    st.header("📊 Model Insights and Visualizations")
+    st.write("""
+    This section provides analytical insights, model interpretability visuals, 
+    and performance metrics from both regression and classification models.
+    """)
+    st.info("📊 Visualizations will be added after model integration.")
