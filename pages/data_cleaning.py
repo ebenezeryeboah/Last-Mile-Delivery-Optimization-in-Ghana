@@ -100,7 +100,10 @@ df['Delivery_Status'] = df['POD Name'].notna().astype(int)
 st.write("### Adding Aggregated and Numeric Features")
 
 df['Days to Delivered'] = pd.to_numeric(df['Days to Delivered'], errors='coerce')
-df['Region_Delivery_Avg'] = df.groupby('Receiver State')['Days to Delivered'].transform('mean').round(2)
+df['Region_Delivery_Avg'] = (
+    df.groupby('Receiver State')['Days to Delivered']
+    .transform(lambda x: x.sample(frac=0.8, random_state=42).mean())
+)
 
 # ---------------------------------------------
 # ✅ Step 5: Results

@@ -43,10 +43,11 @@ if df is not None:
     if task == "Regression":
         st.subheader("📦 Predict Delivery Duration (Days to Delivered)")
 
+        # target and base features (do NOT include Region_Delivery_Avg here to avoid leakage)
         target = 'Days to Delivered'
-        features = [
+        features_base = [
             'Customs Value', 'Dead Weight', 'Customs_Clearance_Duration',
-            'Is_Urban_Region', 'Region_Delivery_Avg', 'Is_Weekend_Delivery',
+            'Is_Urban_Region', 'Is_Weekend_Delivery',
             'Weight_Category', 'Receiver State', 'Receiver Location Name',
             'CManifest_Day_of_Week', 'CManifest_Time_of_Day',
             'POD_Day_of_Week', 'POD_Time_of_Day'
@@ -58,31 +59,98 @@ if df is not None:
             'POD_Day_of_Week', 'POD_Time_of_Day'
         ]
 
-        if any(col not in df.columns for col in features):
-            st.error("⚠️ Some required columns are missing from your data.")
+        # quick column presence check
+        missing_cols = [c for c in features_base + [target] if c not in df.columns]
+        if missing_cols:
+            st.error("⚠️ Some required columns are missing from your data: " + ", ".join(missing_cols))
         else:
-            X = df[features].copy()
-            y = pd.to_numeric(df[target], errors='coerce')
+            # Make a local copy and ensure target numeric
+            df_local = df.copy()
+            df_local[target] = pd.to_numeric(df_local[target], errors='coerce')
 
-            # Fill missing values
-            X['Customs_Clearance_Duration'] = X['Customs_Clearance_Duration'].fillna(X['Customs_Clearance_Duration'].median())
-            X['Is_Weekend_Delivery'] = X['Is_Weekend_Delivery'].fillna(0)
+            # Drop rows where target is missing (can't train on those)
+            df_local = df_local.dropna(subset=[target]).reset_index(drop=True)
 
-            # Drop rows with missing values
-            full_data = pd.concat([X, y], axis=1).dropna()
-            X, y = full_data[features], full_data[target]
+            # ---------- Split BEFORE creating region-level aggregates ----------
+            st.info("Splitting data (train/test) BEFORE computing Region_Delivery_Avg to avoid leakage.")
+            test_size = st.slider("Select Test Data Size (%)", 10, 40, 20, 5, key="reg_split")
 
+            # Prepare temporary table for splitting
+            split_cols = features_base + [target]
+            tmp = df_local[split_cols].copy()
+
+            X_temp = tmp.drop(columns=[target])
+            y_temp = tmp[target]
+
+            X_train_df, X_test_df, y_train, y_test = train_test_split(
+                X_temp, y_temp, test_size=test_size / 100.0, random_state=42
+            )
+
+            # ---------- Compute Region_Delivery_Avg only on training set ----------
+            region_avg_train = pd.concat([X_train_df, y_train], axis=1).groupby('Receiver State')[target].mean()
+            # map to train/test; unseen states in test get global training mean
+            global_region_mean = region_avg_train.mean()
+            X_train_df['Region_Delivery_Avg'] = X_train_df['Receiver State'].map(region_avg_train)
+            X_test_df['Region_Delivery_Avg'] = X_test_df['Receiver State'].map(region_avg_train).fillna(
+                global_region_mean)
+
+            # ---------- Impute numeric missing values using training stats ----------
+            # Use training medians so no information leaks
+            numeric_impute = {}
+            if 'Customs_Clearance_Duration' in X_train_df.columns:
+                numeric_impute['Customs_Clearance_Duration'] = X_train_df['Customs_Clearance_Duration'].median()
+                X_train_df['Customs_Clearance_Duration'] = X_train_df['Customs_Clearance_Duration'].fillna(
+                    numeric_impute['Customs_Clearance_Duration'])
+                X_test_df['Customs_Clearance_Duration'] = X_test_df['Customs_Clearance_Duration'].fillna(
+                    numeric_impute['Customs_Clearance_Duration'])
+
+            if 'Is_Weekend_Delivery' in X_train_df.columns:
+                X_train_df['Is_Weekend_Delivery'] = X_train_df['Is_Weekend_Delivery'].fillna(0)
+                X_test_df['Is_Weekend_Delivery'] = X_test_df['Is_Weekend_Delivery'].fillna(0)
+
+            # ---------- Final feature list (now includes Region_Delivery_Avg computed from train only) ----------
+            features = features_base + ['Region_Delivery_Avg']
+
+            # ---------- Encode categoricals: fit on TRAIN and transform both ----------
             encoders = {}
-            for col in cat_cols:
-                le = LabelEncoder()
-                X[col] = le.fit_transform(X[col].astype(str))
-                encoders[col] = le
+            for col in cat_cols + ['Region_Delivery_Avg']:  # region avg is numeric but safe if present in list
+                if col in X_train_df.columns and X_train_df[col].dtype == object:
+                    le = LabelEncoder()
+                    # fit on training
+                    X_train_df[col] = X_train_df[col].astype(str)
+                    le.fit(X_train_df[col])
+                    X_train_df[col] = le.transform(X_train_df[col])
+                    # transform test; unseen -> map to a default (mode) then transform
+                    X_test_df[col] = X_test_df[col].astype(str)
+                    X_test_df[col] = X_test_df[col].apply(lambda x: x if x in le.classes_ else le.classes_[0])
+                    X_test_df[col] = le.transform(X_test_df[col])
+                    encoders[col] = le
+                elif col in X_train_df.columns:
+                    # numeric (skip)
+                    continue
 
-            test_size = st.slider("Select Test Data Size (%)", 10, 40, 20, 5)
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size/100, random_state=42)
+            # For any remaining object dtypes (like Receiver Location Name), encode similarly
+            for col in X_train_df.select_dtypes(include=['object']).columns:
+                if col not in encoders:
+                    le = LabelEncoder()
+                    X_train_df[col] = le.fit_transform(X_train_df[col].astype(str))
+                    X_test_df[col] = le.transform(
+                        X_test_df[col].astype(str).apply(lambda x: x if x in le.classes_ else le.classes_[0]))
+                    encoders[col] = le
 
+            # Ensure columns order and alignment
+            X_train = X_train_df[features].copy()
+            X_test = X_test_df[features].copy()
+
+            # ---------- Model training with GridSearch ----------
             if st.button("Train Regression Model"):
                 st.info("Training Decision Tree Regressor...")
+
+                # set seeds for reproducibility
+                np.random.seed(42)
+                import random
+
+                random.seed(42)
 
                 param_grid = {
                     'max_depth': [4, 6, 8, 10],
@@ -101,26 +169,31 @@ if df is not None:
                 grid_search.fit(X_train, y_train)
                 best_model = grid_search.best_estimator_
 
-                # Evaluate
-                y_pred = best_model.predict(X_test)
-                st.metric("R²", f"{r2_score(y_test, y_pred):.4f}")
-                st.metric("MAE", f"{mean_absolute_error(y_test, y_pred):.4f}")
-                st.metric("RMSE", f"{np.sqrt(mean_squared_error(y_test, y_pred)):.4f}")
+                # Evaluate (both train & test to check overfitting)
+                y_pred_test = best_model.predict(X_test)
+                y_pred_train = best_model.predict(X_train)
 
-                # Save model & encoders
+                st.metric("Test R²", f"{r2_score(y_test, y_pred_test):.4f}")
+                st.metric("Test MAE", f"{mean_absolute_error(y_test, y_pred_test):.4f}")
+                st.metric("Test RMSE", f"{np.sqrt(mean_squared_error(y_test, y_pred_test)):.4f}")
+
+                st.metric("Train R²", f"{r2_score(y_train, y_pred_train):.4f}")
+
+                # Save model & encoders and metadata (features)
                 os.makedirs("models", exist_ok=True)
+                model_info = {
+                    "model": best_model,
+                    "features": features,
+                    "encoders": encoders,
+                    "numeric_impute": numeric_impute
+                }
                 with open("models/regression_model.pkl", "wb") as f:
-                    pickle.dump(best_model, f)
-                with open("models/regression_encoders.pkl", "wb") as f:
-                    pickle.dump(encoders, f)
-                st.success("💾 Regression model & encoders saved successfully!")
+                    pickle.dump(model_info, f)
 
-                # ---------------------------------------------
-                # 🌳 DECISION TREE VISUALIZATION FOR REGRESSION
-                # ---------------------------------------------
+                st.success("💾 Regression model, encoders & metadata saved successfully in models/regression_model.pkl!")
+
+                # ---------- Tree visualization ----------
                 st.subheader("🧭 Decision Tree Structure (Regression Model)")
-                st.caption("Visual representation of how the model predicts delivery duration based on key variables.")
-
                 from sklearn.tree import plot_tree
                 import io
 
@@ -145,9 +218,7 @@ if df is not None:
                     mime="image/png"
                 )
 
-                # ---------------------------------------------
-                # 🧩 MODEL INSIGHTS PANEL
-                # ---------------------------------------------
+                # Insights
                 with st.expander("📘 Model Insights", expanded=False):
                     st.markdown("**🧠 Structural Summary of the Decision Tree Regressor**")
                     st.write(f"• **Max Depth:** {best_model.get_depth()}")
@@ -171,10 +242,9 @@ if df is not None:
                         st.success("✅ Balanced depth: interpretable and accurate.")
 
 
-    ## =====================================================================
-# 🔸 CLASSIFICATION MODEL
-# =====================================================================
-
+    # =====================================================================
+    # 🔸 CLASSIFICATION MODEL (Updated Version)
+    # =====================================================================
     elif task == "Classification":
         st.subheader("📦 Predict Delivery Success or Failure")
 
@@ -198,7 +268,12 @@ if df is not None:
             y = df[target].copy()
 
             # Handle missing values
-            X['Customs_Clearance_Duration'] = X['Customs_Clearance_Duration'].fillna(X['Customs_Clearance_Duration'].median())
+            numeric_impute = {}
+            for col in ['Customs_Clearance_Duration', 'Customs Value', 'Region_Delivery_Avg']:
+                median_val = X[col].median()
+                numeric_impute[col] = median_val
+                X[col] = X[col].fillna(median_val)
+
             X.dropna(inplace=True)
             y = y.loc[X.index]
 
@@ -207,11 +282,13 @@ if df is not None:
             # Encode categorical variables
             encoders = {}
             from sklearn.preprocessing import LabelEncoder
+
             for col in cat_cols:
                 le = LabelEncoder()
                 X[col] = le.fit_transform(X[col].astype(str))
                 encoders[col] = le
 
+            # Encode target
             y_encoder = LabelEncoder()
             y = y_encoder.fit_transform(y.astype(str))
             encoders['target'] = y_encoder
@@ -222,7 +299,6 @@ if df is not None:
                 X, y, test_size=test_size / 100, random_state=42, stratify=y
             )
 
-            # Train model
             if st.button("Train Classification Model"):
                 from sklearn.tree import DecisionTreeClassifier, plot_tree
                 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
@@ -232,6 +308,7 @@ if df is not None:
 
                 st.info("Training Decision Tree Classifier... ⏳")
 
+                # Base classifier
                 clf = DecisionTreeClassifier(
                     max_depth=6,
                     min_samples_split=10,
@@ -244,7 +321,7 @@ if df is not None:
                 y_pred = clf.predict(X_test)
 
                 # ---------------------------------------------
-                # 📈 EVALUATION
+                # 📈 PERFORMANCE
                 # ---------------------------------------------
                 accuracy = accuracy_score(y_test, y_pred)
                 report = classification_report(y_test, y_pred, output_dict=True)
@@ -274,16 +351,16 @@ if df is not None:
                 st.pyplot(fig2)
 
                 # ---------------------------------------------
-                # 🌳 DECISION TREE VISUALIZATION (NEW)
+                # 🌳 DECISION TREE VISUALIZATION
                 # ---------------------------------------------
                 st.subheader("🧭 Decision Tree Structure")
-                st.caption("Visual representation of how the model splits features to make delivery success predictions.")
+                st.caption("Visual representation of how the model splits features to predict delivery success.")
 
                 fig3, ax3 = plt.subplots(figsize=(22, 12))
                 plot_tree(
                     clf,
                     feature_names=X_train.columns,
-                    class_names=['Not Delivered', 'Delivered'],
+                    class_names=y_encoder.classes_,
                     filled=True,
                     rounded=True,
                     fontsize=9,
@@ -291,7 +368,7 @@ if df is not None:
                 )
                 st.pyplot(fig3)
 
-                # Save visualization as PNG for download
+                # Save visualization as PNG
                 buf = io.BytesIO()
                 fig3.savefig(buf, format="png", bbox_inches="tight")
                 st.download_button(
@@ -302,18 +379,15 @@ if df is not None:
                 )
 
                 # ---------------------------------------------
-                # 🧩 MODEL INSIGHTS PANEL
+                # 🧩 MODEL INSIGHTS
                 # ---------------------------------------------
                 with st.expander("📘 Model Insights", expanded=False):
                     st.markdown("**🧠 Structural Summary of the Decision Tree Model**")
                     st.write(f"• **Max Depth:** {clf.get_depth()}")
-                    st.write(f"• **Number of Leaves:** {clf.get_n_leaves()}")
-                    st.write(f"• **Number of Decision Nodes:** {clf.tree_.node_count}")
-                    st.write(f"• **Total Features Used:** {len(X_train.columns)}")
-
-                    interpretability = (
-                        "✅ Highly Interpretable" if clf.get_depth() <= 6 else "⚠️ Moderately Complex"
-                    )
+                    st.write(f"• **Leaves:** {clf.get_n_leaves()}")
+                    st.write(f"• **Nodes:** {clf.tree_.node_count}")
+                    st.write(f"• **Features Used:** {len(X_train.columns)}")
+                    interpretability = "✅ Highly Interpretable" if clf.get_depth() <= 6 else "⚠️ Moderately Complex"
                     st.write(f"• **Model Complexity:** {interpretability}")
 
                     if clf.get_depth() > 8:
@@ -324,12 +398,17 @@ if df is not None:
                         st.success("✅ Balanced model depth for interpretability and accuracy.")
 
                 # ---------------------------------------------
-                # 💾 SAVE MODEL & ENCODERS
+                # 💾 SAVE MODEL + METADATA (Unified Format)
                 # ---------------------------------------------
                 os.makedirs("models", exist_ok=True)
-                with open("models/classification_model.pkl", "wb") as f:
-                    pickle.dump(clf, f)
-                with open("models/classification_encoders.pkl", "wb") as f:
-                    pickle.dump(encoders, f)
+                model_info = {
+                    "model": clf,
+                    "encoders": encoders,
+                    "features": features,
+                    "numeric_impute": numeric_impute
+                }
 
-                st.success("💾 Model and encoders saved successfully to 'models/'")
+                with open("models/classification_model.pkl", "wb") as f:
+                    pickle.dump(model_info, f)
+
+                st.success("💾 Model and metadata saved successfully in unified format!")
