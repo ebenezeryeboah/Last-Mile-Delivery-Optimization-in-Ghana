@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+import pickle
+import os
 
 # ---------------------------------------------
 # 🎨 PAGE TITLE
@@ -77,9 +79,13 @@ if df is not None:
         elif chart_option == "Deliveries by Day of Week":
             st.write("Which days of the week see the most deliveries.")
             fig, ax = plt.subplots(figsize=(8, 5))
-            sns.countplot(x='POD_Day_of_Week', data=df, order=[
-                'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'
-            ], palette='crest', ax=ax)
+            sns.countplot(
+                x='POD_Day_of_Week',
+                data=df,
+                order=['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'],
+                palette='crest',
+                ax=ax
+            )
             plt.xticks(rotation=30)
             ax.set_title("Deliveries by Day of the Week")
             st.pyplot(fig)
@@ -118,10 +124,17 @@ if df is not None:
             avg_duration = df.groupby('Is_Urban_Region')['Days to Delivered'].mean().reset_index()
             avg_duration['Region Type'] = avg_duration['Is_Urban_Region'].map({1: 'Urban', 0: 'Rural'})
             fig, ax = plt.subplots(figsize=(6, 4))
-            sns.barplot(x='Region Type', y='Days to Delivered', data=avg_duration, palette='coolwarm', ax=ax)
+            sns.barplot(
+                x='Region Type',
+                y='Days to Delivered',
+                hue='Region Type',
+                data=avg_duration,
+                palette='coolwarm',
+                legend=False,
+                ax=ax
+            )
             ax.set_title("Urban vs. Rural Delivery Duration")
             st.pyplot(fig)
-
 
     # ---------------------------------------------
     # 💚 3️⃣ CORRELATION & FEATURE IMPORTANCE
@@ -167,45 +180,50 @@ if df is not None:
 
         # ---- Regression Model Feature Importance ----
         elif chart_option == "Regression Model Feature Importance":
-            import pickle, os
             model_path = "models/regression_model.pkl"
             if os.path.exists(model_path):
                 with open(model_path, 'rb') as f:
-                    model = pickle.load(f)
-                # Extract feature names (manually if needed)
-                feature_names = [
-                    'Customs Value', 'Dead Weight', 'Customs_Clearance_Duration',
-                    'Hub_to_Delivery_Duration', 'Is_Urban_Region', 'Region_Delivery_Avg',
-                    'Is_Weekend_Delivery', 'Weight_Category', 'Receiver State',
-                    'Receiver Location Name', 'CManifest_Day_of_Week', 'CManifest_Time_of_Day',
-                    'POD_Day_of_Week', 'POD_Time_of_Day'
-                ]
-                importance = model.feature_importances_
-                feat_imp = pd.Series(importance, index=feature_names).sort_values(ascending=True)
-                fig, ax = plt.subplots(figsize=(8, 6))
-                sns.barplot(x=feat_imp, y=feat_imp.index, palette='viridis', ax=ax)
-                ax.set_title("Feature Importance (Regression Model)")
-                st.pyplot(fig)
+                    model_info = pickle.load(f)
+
+                if isinstance(model_info, dict) and "model" in model_info:
+                    model = model_info["model"]
+                    features = model_info.get("features", [])
+                else:
+                    model = model_info
+                    features = []
+
+                if hasattr(model, "feature_importances_"):
+                    importance = pd.Series(model.feature_importances_, index=features).dropna().sort_values(ascending=True)
+                    fig, ax = plt.subplots(figsize=(8, 6))
+                    sns.barplot(x=importance, y=importance.index, palette='viridis', ax=ax)
+                    ax.set_title("Feature Importance (Regression Model)")
+                    st.pyplot(fig)
+                else:
+                    st.warning("⚠️ This model does not have feature_importances_.")
             else:
                 st.error("Regression model not found. Please train and save it first.")
 
         # ---- Classification Model Feature Importance ----
         elif chart_option == "Classification Model Feature Importance":
-            import pickle, os
             model_path = "models/classification_model.pkl"
             if os.path.exists(model_path):
                 with open(model_path, 'rb') as f:
-                    clf = pickle.load(f)
-                feature_names = [
-                    'Customs Value', 'Dead Weight', 'Is_Urban_Region', 'Region_Delivery_Avg',
-                    'Hub_to_Delivery_Duration', 'Customs_Clearance_Duration',
-                    'CManifest_Day_of_Week', 'CManifest_Time_of_Day', 'Weight_Category'
-                ]
-                importance = clf.feature_importances_
-                feat_imp = pd.Series(importance, index=feature_names).sort_values(ascending=True)
-                fig, ax = plt.subplots(figsize=(8, 6))
-                sns.barplot(x=feat_imp, y=feat_imp.index, palette='mako', ax=ax)
-                ax.set_title("Feature Importance (Classification Model)")
-                st.pyplot(fig)
+                    model_info = pickle.load(f)
+
+                if isinstance(model_info, dict) and "model" in model_info:
+                    clf = model_info["model"]
+                    features = model_info.get("features", [])
+                else:
+                    clf = model_info
+                    features = []
+
+                if hasattr(clf, "feature_importances_"):
+                    importance = pd.Series(clf.feature_importances_, index=features).dropna().sort_values(ascending=True)
+                    fig, ax = plt.subplots(figsize=(8, 6))
+                    sns.barplot(x=importance, y=importance.index, palette='mako', ax=ax)
+                    ax.set_title("Feature Importance (Classification Model)")
+                    st.pyplot(fig)
+                else:
+                    st.warning("⚠️ This model does not have feature_importances_.")
             else:
                 st.error("Classification model not found. Please train and save it first.")
